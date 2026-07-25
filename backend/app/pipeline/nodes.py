@@ -215,6 +215,17 @@ def _llm_call_sync(messages, max_tokens=8192):
         elapsed = _time.time() - t0
         print(f"[LLM] Response received in {elapsed:.1f}s", flush=True)
         return data["choices"][0]["message"]["content"]
+    except urllib.error.HTTPError as e:
+        elapsed = _time.time() - t0
+        error_body = ""
+        try:
+            error_body = e.read().decode("utf-8")
+        except Exception:
+            pass
+        print(f"[LLM] Error after {elapsed:.1f}s: {type(e).__name__}: {e}", flush=True)
+        print(f"[LLM] Response body: {error_body}", flush=True)
+        sys.stdout.flush()
+        raise
     except Exception as e:
         elapsed = _time.time() - t0
         print(f"[LLM] Error after {elapsed:.1f}s: {type(e).__name__}: {e}", flush=True)
@@ -244,22 +255,33 @@ def _llm_stream_sync(messages, max_tokens=4096):
             "Content-Type": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=300) as resp:
-        for raw_line in resp:
-            line = raw_line.decode("utf-8").strip()
-            if not line or not line.startswith("data: "):
-                continue
-            data = line[6:]
-            if data == "[DONE]":
-                break
-            try:
-                chunk = json.loads(data)
-                delta = chunk["choices"][0].get("delta", {})
-                content = delta.get("content")
-                if content:
-                    yield content
-            except (json.JSONDecodeError, KeyError, IndexError):
-                continue
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8").strip()
+                if not line or not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                    delta = chunk["choices"][0].get("delta", {})
+                    content = delta.get("content")
+                    if content:
+                        yield content
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    continue
+    except urllib.error.HTTPError as e:
+        error_body = ""
+        try:
+            error_body = e.read().decode("utf-8")
+        except Exception:
+            pass
+        print(f"[LLM] Stream error: {type(e).__name__}: {e}", flush=True)
+        print(f"[LLM] Response body: {error_body}", flush=True)
+        sys.stdout.flush()
+        raise
 
 
 def _ffmpeg_extract(video_path, audio_path, sample_rate):

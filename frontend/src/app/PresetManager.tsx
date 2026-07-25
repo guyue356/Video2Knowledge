@@ -187,7 +187,7 @@ export default function PresetManager({ open, onClose, onPresetsChanged }: Prese
           <div>
             <h2 className="text-lg font-semibold">预设管理</h2>
             <p className="text-sm text-zinc-500 mt-0.5">
-              管理博客生成的提示词预设，可在上传或重新生成时选择
+              管理产物生成的提示词预设，可在上传或重新生成时选择
             </p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-zinc-100 rounded-lg transition-colors">

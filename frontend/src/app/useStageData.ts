@@ -12,7 +12,7 @@ export const TAB_LABELS: Record<TabKey, string> = {
   transcript: "转录",
   chapters: "章节",
   knowledge: "知识",
-  blog: "博客",
+  blog: "产物",
 };
 
 export const TAB_ICONS: Record<TabKey, string> = {

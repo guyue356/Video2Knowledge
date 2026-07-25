@@ -339,7 +339,7 @@ export default function StageViewer({
         {activeTab === "blog" && (
           <div>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold">博客</h3>
+              <h3 className="text-lg font-semibold">产物</h3>
               <div className="flex gap-2">
                 {onRegenerate && (
                   <button
@@ -366,7 +366,7 @@ export default function StageViewer({
                 <MarkdownRenderer content={resolvedBlogMd} />
               </div>
             ) : (
-              <p className="text-zinc-500">暂无博客</p>
+              <p className="text-zinc-500">暂无产物</p>
             )}
           </div>
         )}

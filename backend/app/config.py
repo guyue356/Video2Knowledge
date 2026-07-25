@@ -16,7 +16,7 @@ for d in [VIDEOS_DIR, AUDIO_DIR, OUTPUT_DIR]:
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
-DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_MODEL = "deepseek-v4-flash"
 MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
 _default_mimo_base_url = (
     "https://token-plan-cn.xiaomimimo.com/v1"

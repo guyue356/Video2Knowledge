@@ -29,7 +29,7 @@ const STEP_LABELS: Record<string, string> = {
   transcribe: "语音转录",
   segment_chapters: "章节划分",
   extract_knowledge: "知识提取",
-  generate_blog: "博客生成",
+  generate_blog: "产物生成",
 };
 
 interface StepState {
@@ -95,7 +95,7 @@ const STATUS_LABELS: Record<string, string> = {
   transcribing: "转录中",
   segmenting: "分段中",
   extracting_knowledge: "提取知识",
-  generating_blog: "生成博客",
+  generating_blog: "生成产物",
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -830,7 +830,7 @@ export default function Home() {
                     </span>
                     {v.has_blog && (
                       <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700">
-                        已生成博客
+                        已生成产物
                       </span>
                     )}
                   </div>
@@ -1021,7 +1021,7 @@ export default function Home() {
             { label: "转录片段", value: v.transcript_segments },
             { label: "章节数", value: v.chapters_count },
             { label: "知识点", value: v.concepts_count },
-            { label: "博客", value: v.blog ? "有" : "无" },
+            { label: "产物", value: v.blog ? "有" : "无" },
           ].map((s) => (
             <div key={s.label} className="bg-zinc-50 border border-zinc-200 rounded-lg p-3 text-center">
               <div className="text-lg font-bold text-zinc-800">{s.value}</div>
@@ -1066,7 +1066,7 @@ export default function Home() {
           <div>
             <h1 className="text-lg font-semibold tracking-tight">Video2TechBlog</h1>
             <p className="text-xs text-zinc-500">
-              将视频、音频或链接转化为可发表的文章
+              将视频、音频或链接转化为新的文本产物
             </p>
           </div>
           <nav className="flex gap-1 ml-4">
@@ -1125,7 +1125,7 @@ export default function Home() {
       {regenerateDialogVideoId && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setRegenerateDialogVideoId(null)}>
           <div className="bg-white border border-zinc-200 rounded-xl p-6 max-w-md w-full mx-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold mb-4">重新生成博客</h3>
+            <h3 className="text-lg font-semibold mb-4">重新生成产物</h3>
             <div className="mb-4">
               <label className="block text-sm font-medium text-zinc-700 mb-2">选择提示词预设</label>
               <PresetSelector
@@ -1135,7 +1135,7 @@ export default function Home() {
               />
             </div>
             <p className="text-xs text-zinc-500 mb-4">
-              将使用所选预设的提示词重新生成博客，保留已有的转录、章节和知识数据。
+              将使用所选预设的提示词重新生成产物，保留已有的转录、章节和知识数据。
             </p>
             <div className="flex justify-end gap-3">
               <button
@@ -1167,7 +1167,7 @@ export default function Home() {
               <li>原始上传文件（视频/音频/链接缓存）</li>
               <li>提取的音频</li>
               <li>转录文本、章节、知识点</li>
-              <li>生成的博客</li>
+              <li>生成的产物</li>
             </ul>
             <p className="text-xs text-zinc-400 mb-4 font-mono">{deleteConfirm}</p>
             <div className="flex gap-3 justify-end">
@@ -1294,7 +1294,7 @@ export default function Home() {
                 <h2 className="text-2xl font-bold mb-2">上传内容</h2>
                 <p className="text-zinc-500">
                   支持视频文件、音频文件或媒体链接（YouTube/Bilibili 等）。
-                  上传完成后，由你手动启动转录和博客生成。
+                  上传完成后，由你手动启动转录和产物生成。
                 </p>
               </div>
 
@@ -1486,9 +1486,14 @@ export default function Home() {
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
                       </svg>
-                      <h2 className="min-w-0 truncate text-lg font-semibold text-zinc-800">
-                        {currentStepLabel || "准备中..."}
-                      </h2>
+                      <div className="min-w-0">
+                        <h2 className="min-w-0 truncate text-lg font-semibold text-zinc-800">
+                          {currentStepLabel || "准备中..."}
+                        </h2>
+                        {uploadedName && (
+                          <p className="mt-0.5 text-xs text-zinc-400 truncate">{uploadedName}</p>
+                        )}
+                      </div>
                       <span className="rounded-md bg-sky-50 px-2 py-0.5 text-xs font-mono font-semibold text-sky-600 tabular-nums">
                         {overallPct}%
                       </span>
@@ -1734,7 +1739,7 @@ export default function Home() {
                 <section className="mb-6 animate-fade-in-up">
                   <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
-                    实时博客输出
+                    实时产物输出
                   </h3>
                   <div className="bg-white border border-zinc-200 rounded-xl p-5 max-h-[70vh] overflow-y-auto shadow-sm">
                     <MarkdownRenderer content={blogMd} />
