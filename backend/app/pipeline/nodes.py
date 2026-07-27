@@ -179,6 +179,55 @@ def _get_whisper():
     return _whisper_model
 
 
+def _whisper_transcribe_options(audio_path, language):
+    return {
+        "audio": audio_path,
+        "beam_size": 1,
+        "best_of": 1,
+        "language": language,
+        "vad_filter": True,
+        "vad_parameters": {
+            "min_silence_duration_ms": 500,
+            "speech_pad_ms": 200,
+        },
+        "condition_on_previous_text": False,
+        "compression_ratio_threshold": 2.2,
+        "log_prob_threshold": -1.0,
+        "no_speech_threshold": 0.6,
+        "repetition_penalty": 1.1,
+        "no_repeat_ngram_size": 3,
+        "word_timestamps": True,
+        "hallucination_silence_threshold": 2.0,
+    }
+
+
+def _normalize_transcript_text(text):
+    return "".join(ch for ch in (text or "").strip().lower() if ch.isalnum())
+
+
+def _is_repeated_whisper_hallucination(seg, kept_segments):
+    text_key = _normalize_transcript_text(seg.get("text", ""))
+    if not text_key or len(text_key) < 4 or not kept_segments:
+        return False
+
+    last_key = _normalize_transcript_text(kept_segments[-1].get("text", ""))
+    if text_key != last_key:
+        return False
+
+    duration = float(seg.get("end", 0) or 0) - float(seg.get("start", 0) or 0)
+    previous_duration = (
+        float(kept_segments[-1].get("end", 0) or 0)
+        - float(kept_segments[-1].get("start", 0) or 0)
+    )
+    consecutive_same = 1
+    for previous in reversed(kept_segments[:-1]):
+        if _normalize_transcript_text(previous.get("text", "")) != text_key:
+            break
+        consecutive_same += 1
+
+    return duration >= 20 or previous_duration >= 20 or consecutive_same >= 2
+
+
 def _llm_call_sync(messages, max_tokens=8192):
     import urllib.request
     import time as _time
@@ -323,17 +372,22 @@ def _whisper_transcribe(audio_path, language):
     if model is None:
         return None, None, None
     segments_gen, info = model.transcribe(
-        audio_path, beam_size=1, language=language, vad_filter=True
+        **_whisper_transcribe_options(audio_path, language)
     )
     transcript_parts = []
     seg_list = []
+    skipped_repeats = 0
     for seg in segments_gen:
+        seg_data = {"start": seg.start, "end": seg.end, "text": seg.text.strip()}
+        if _is_repeated_whisper_hallucination(seg_data, seg_list):
+            skipped_repeats += 1
+            continue
         transcript_parts.append(
-            f"[{seg.start:.1f}s-{seg.end:.1f}s] {seg.text.strip()}"
+            f"[{seg_data['start']:.1f}s-{seg_data['end']:.1f}s] {seg_data['text']}"
         )
-        seg_list.append({
-            "start": seg.start, "end": seg.end, "text": seg.text.strip()
-        })
+        seg_list.append(seg_data)
+    if skipped_repeats:
+        print(f"[Transcribe] Filtered {skipped_repeats} repeated Whisper hallucination segments")
     full_text = "\n".join(transcript_parts)
     return full_text, seg_list, info.language
 
@@ -786,7 +840,7 @@ async def transcribe_with_whisper(state):
                 return
             print("[Transcribe] Model ready, starting transcribe() call...")
             segments_gen, info = model.transcribe(
-                audio_path, beam_size=1, language=language, vad_filter=True
+                **_whisper_transcribe_options(audio_path, language)
             )
             lang_holder[0] = info.language
             print(f"[Transcribe] Language detected: {info.language}, iterating segments...")
@@ -810,6 +864,7 @@ async def transcribe_with_whisper(state):
     # Consume segments and emit progress in real-time
     transcript_parts = []
     seg_list = []
+    skipped_repeats = 0
     while True:
         try:
             seg = await asyncio.wait_for(seg_queue.get(), timeout=600)
@@ -820,6 +875,13 @@ async def transcribe_with_whisper(state):
             raise RuntimeError("Transcription timed out: no progress for 600 seconds")
         if seg is None:
             break
+        if _is_repeated_whisper_hallucination(seg, seg_list):
+            skipped_repeats += 1
+            print(
+                "[Transcribe] Skipped repeated hallucination segment: "
+                f"{seg['start']:.1f}s-{seg['end']:.1f}s {seg['text'][:40]}"
+            )
+            continue
         transcript_parts.append(f"[{seg['start']:.1f}s-{seg['end']:.1f}s] {seg['text']}")
         seg_list.append(seg)
         # Emit progress every 10 segments
@@ -841,7 +903,8 @@ async def transcribe_with_whisper(state):
     await sse_manager.emit(task_id, "step_result",
         {"step": "transcribe", "transcript": full_text,
          "segments": seg_list, "language": language,
-         "progress_pct": 100, "detail": f"{len(seg_list)} segments"})
+         "progress_pct": 100,
+         "detail": f"{len(seg_list)} segments, skipped {skipped_repeats} repeats"})
     state["transcript"] = full_text
     state["segments"] = seg_list
     return state
