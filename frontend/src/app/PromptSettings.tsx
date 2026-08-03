@@ -96,22 +96,26 @@ export default function PromptSettings({ open, onClose }: PromptSettingsProps) {
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+    <div className="drawer-backdrop" onClick={onClose}>
       <div
-        className="bg-white border border-zinc-200 rounded-xl shadow-xl max-w-4xl w-full mx-4 max-h-[85vh] flex flex-col"
+        className="drawer-panel"
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="prompt-settings-title"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200">
           <div>
-            <h2 className="text-lg font-semibold">提示词模板设置</h2>
+            <h2 id="prompt-settings-title" className="text-lg font-semibold">生成设置</h2>
             <p className="text-sm text-zinc-500 mt-0.5">
-              编辑各阶段的 AI 提示词。支持变量: {"{transcript}"}, {"{chapter_titles}"}, {"{knowledge_str}"}
+              调整章节、知识与文章的生成规则。支持变量: {"{transcript}"}, {"{chapter_titles}"}, {"{knowledge_str}"}
             </p>
           </div>
           <button
             onClick={onClose}
-            className="p-2 hover:bg-zinc-100 rounded-lg transition-colors"
+            className="icon-button"
+            aria-label="关闭提示词设置"
           >
             <svg className="w-5 h-5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -139,7 +143,7 @@ export default function PromptSettings({ open, onClose }: PromptSettingsProps) {
               const label = TEMPLATE_LABELS[t.id] || t.name;
 
               return (
-                <div key={t.id} className="border border-zinc-200 rounded-lg overflow-hidden">
+                <div key={t.id} className="surface-card overflow-hidden shadow-none">
                   {/* Collapsed header */}
                   <button
                     onClick={() => {
@@ -148,7 +152,7 @@ export default function PromptSettings({ open, onClose }: PromptSettingsProps) {
                         setEditingId(null);
                       }
                     }}
-                    className="w-full flex items-center justify-between px-4 py-3 hover:bg-zinc-50 transition-colors"
+                    className="flex w-full items-center justify-between px-4 py-3 transition-colors hover:bg-zinc-50"
                   >
                     <div className="flex items-center gap-3">
                       <span className="text-sm font-medium">{label}</span>
@@ -172,20 +176,20 @@ export default function PromptSettings({ open, onClose }: PromptSettingsProps) {
                           <textarea
                             value={editValue}
                             onChange={(e) => setEditValue(e.target.value)}
-                            className="w-full h-64 px-3 py-2 border border-zinc-300 rounded-lg text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-sky-400"
+                            className="control-field h-64 py-3 font-mono text-sm resize-y"
                             spellCheck={false}
                           />
                           <div className="flex gap-2 mt-2">
                             <button
                               onClick={() => handleSave(t.id)}
                               disabled={saving}
-                              className="px-4 py-1.5 bg-sky-400 hover:bg-sky-400 disabled:opacity-40 rounded-lg text-sm font-medium text-white transition-colors"
+                              className="btn-primary min-h-9"
                             >
                               {saving ? "保存中..." : "保存"}
                             </button>
                             <button
                               onClick={() => setEditingId(null)}
-                              className="px-4 py-1.5 bg-zinc-200 hover:bg-zinc-300 rounded-lg text-sm transition-colors"
+                              className="btn-secondary min-h-9"
                             >
                               取消
                             </button>
@@ -202,7 +206,7 @@ export default function PromptSettings({ open, onClose }: PromptSettingsProps) {
                                 setEditValue(t.template);
                                 setEditingId(t.id);
                               }}
-                              className="px-4 py-1.5 bg-zinc-900 hover:bg-zinc-700 rounded-lg text-sm font-medium text-white transition-colors"
+                              className="btn-secondary min-h-9"
                             >
                               编辑
                             </button>

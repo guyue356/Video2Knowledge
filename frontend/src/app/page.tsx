@@ -1,16 +1,12 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import dynamic from "next/dynamic";
 import { useStageData, type TabKey } from "./useStageData";
 import StageViewer from "./StageViewer";
 import PromptSettings from "./PromptSettings";
 import PresetSelector from "./PresetSelector";
 import PresetManager from "./PresetManager";
-
-const MarkdownRenderer = dynamic(() => import("./MarkdownRenderer"), {
-  loading: () => <div className="animate-pulse h-64 bg-zinc-100 rounded-lg" />,
-});
+import ProcessingWorkspace from "./ProcessingWorkspace";
 
 const API_BASE = "http://localhost:8001";
 
@@ -29,7 +25,7 @@ const STEP_LABELS: Record<string, string> = {
   transcribe: "语音转录",
   segment_chapters: "章节划分",
   extract_knowledge: "知识提取",
-  generate_blog: "产物生成",
+  generate_blog: "文章生成",
 };
 
 interface StepState {
@@ -38,6 +34,8 @@ interface StepState {
   detail: string;
   message: string;
   result: unknown;
+  startedAt?: number;
+  finishedAt?: number;
   apiProgress?: {
     completed: number;
     total: number;
@@ -80,12 +78,6 @@ const SOURCE_LABELS: Record<string, string> = {
   url: "链接",
 };
 
-const SOURCE_COLORS: Record<string, string> = {
-  video: "bg-sky-100 text-sky-600",
-  audio: "bg-teal-100 text-teal-700",
-  url: "bg-purple-100 text-purple-700",
-};
-
 const STATUS_LABELS: Record<string, string> = {
   completed: "已完成",
   failed: "失败",
@@ -95,19 +87,19 @@ const STATUS_LABELS: Record<string, string> = {
   transcribing: "转录中",
   segmenting: "分段中",
   extracting_knowledge: "提取知识",
-  generating_blog: "生成产物",
+  generating_blog: "生成文章",
 };
 
-const STATUS_COLORS: Record<string, string> = {
-  completed: "bg-green-100 text-green-700",
-  failed: "bg-red-100 text-red-700",
-  cancelled: "bg-zinc-200 text-zinc-600",
-  pending: "bg-yellow-100 text-yellow-700",
-  extracting_audio: "bg-sky-100 text-sky-600",
-  transcribing: "bg-sky-100 text-sky-600",
-  segmenting: "bg-sky-100 text-sky-600",
-  extracting_knowledge: "bg-sky-100 text-sky-600",
-  generating_blog: "bg-sky-100 text-sky-600",
+const STATUS_DOT_COLORS: Record<string, string> = {
+  completed: "is-completed",
+  failed: "bg-red-600",
+  cancelled: "bg-zinc-400",
+  pending: "bg-amber-500",
+  extracting_audio: "bg-blue-600",
+  transcribing: "bg-blue-600",
+  segmenting: "bg-blue-600",
+  extracting_knowledge: "bg-blue-600",
+  generating_blog: "bg-blue-600",
 };
 
 function formatDuration(sec: number): string {
@@ -149,6 +141,7 @@ export default function Home() {
   const [blogMd, setBlogMd] = useState("");
   const [blogId, setBlogId] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [streamStatus, setStreamStatus] = useState<"connecting" | "connected" | "reconnecting">("connecting");
   const [phase, setPhase] = useState<"upload" | "processing" | "done">("upload");
   const [activeTab, setActiveTab] = useState<TabKey>("video");
   const [elapsed, setElapsed] = useState(0);
@@ -174,8 +167,11 @@ export default function Home() {
   const [selectedVideo, setSelectedVideo] = useState<VideoDetail | null>(null);
   const [assetDetailTab, setAssetDetailTab] = useState<TabKey>("video");
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [assetMenuId, setAssetMenuId] = useState<string | null>(null);
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [showPromptSettings, setShowPromptSettings] = useState(false);
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+  const [isDragActive, setIsDragActive] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [presetId, setPresetId] = useState<number | null>(null);
   const [showPresetManager, setShowPresetManager] = useState(false);
@@ -206,13 +202,13 @@ export default function Home() {
   }, [assetSearch, assetStatusFilter]);
 
   useEffect(() => {
-    if (view === "assets" && !selectedVideo) {
+    if (!selectedVideo && (view === "assets" || (view === "upload" && phase === "upload"))) {
       const timer = window.setTimeout(() => {
         fetchVideoList();
-      }, 0);
+      }, 300);
       return () => window.clearTimeout(timer);
     }
-  }, [view, selectedVideo, fetchVideoList]);
+  }, [view, phase, selectedVideo, fetchVideoList]);
 
   // Fetch detail for a selected video
   const fetchVideoDetail = useCallback(async (videoId: string) => {
@@ -252,6 +248,8 @@ export default function Home() {
       if (res.ok) {
         setView("upload");
         setPhase("processing");
+        setError("");
+        setStreamStatus("connecting");
         setTaskId(videoId);
         setSelectedVideo(null);
         detailStage.reset();
@@ -261,6 +259,8 @@ export default function Home() {
         setKnowledge({});
         setBlogMd("");
         setBlogId(null);
+        setElapsed(0);
+        elapsedRef.current = 0;
         setActiveTab("blog");
         doneStage.reset();
       }
@@ -293,6 +293,7 @@ export default function Home() {
       setBlogId(null);
       setElapsed(0);
       elapsedRef.current = 0;
+      setStreamStatus("connecting");
       setActiveTab("blog");
       doneStage.reset();
       setPhase("processing");
@@ -447,7 +448,7 @@ export default function Home() {
 
   // Timer for elapsed time during processing
   useEffect(() => {
-    if (phase === "processing") {
+    if (phase === "processing" && !error) {
       const startTimer = window.setTimeout(() => {
         elapsedRef.current = 0;
         setElapsed(0);
@@ -475,7 +476,7 @@ export default function Home() {
         timerRef.current = null;
       }
     };
-  }, [phase]);
+  }, [error, phase]);
 
   // Connect to SSE when taskId changes
   useEffect(() => {
@@ -483,11 +484,12 @@ export default function Home() {
 
     const es = new EventSource(`${API_BASE}/api/task/${taskId}/stream`);
     readerRef.current = es;
+    es.onopen = () => setStreamStatus("connected");
 
     const setStepStatus = (stepKey: string, status: StepState["status"]) => {
       setSteps((prev) => ({
         ...prev,
-        [stepKey]: { ...prev[stepKey], status },
+        [stepKey]: { ...prev[stepKey], status, finishedAt: status === "error" ? Date.now() : prev[stepKey]?.finishedAt },
       }));
     };
 
@@ -502,10 +504,16 @@ export default function Home() {
           for (let i = 0; i < idx; i++) {
             const key = STEPS[i];
             if (next[key]?.status === "active") {
-              next[key] = { ...next[key], status: "completed", progressPct: 100 };
+              next[key] = { ...next[key], status: "completed", progressPct: 100, finishedAt: Date.now() };
             }
           }
-          next[d.step] = { ...next[d.step], status: "active", message: d.message || "" };
+          next[d.step] = {
+            ...next[d.step],
+            status: "active",
+            message: d.message || "",
+            startedAt: next[d.step]?.startedAt ?? Date.now(),
+            finishedAt: undefined,
+          };
           return next;
         });
       }
@@ -527,7 +535,7 @@ export default function Home() {
             ...prev,
             [d.step]: {
               ...prev[d.step],
-              progressPct: d.progress_pct ?? prev[d.step].progressPct,
+              progressPct: Math.max(prev[d.step].progressPct || 0, Number(d.progress_pct ?? 0)),
               detail: d.detail ?? "",
               apiProgress,
             },
@@ -558,6 +566,7 @@ export default function Home() {
               status: "completed",
               result: d,
               progressPct: 100,
+              finishedAt: Date.now(),
               detail: d.detail ?? prev[d.step].detail ?? "",
               apiProgress,
             },
@@ -581,7 +590,8 @@ export default function Home() {
       if (STEPS.includes(d.step)) {
         setStepStatus(d.step, "error");
       }
-      setPhase("upload");
+      setStreamStatus("connected");
+      es.close();
     });
 
     es.addEventListener("cancelled", () => {
@@ -591,12 +601,13 @@ export default function Home() {
     es.addEventListener("complete", (e) => {
       const d = JSON.parse(e.data);
       setBlogId(d.blog_id || null);
+      setStreamStatus("connected");
       // 处理完成兜底：把所有仍活跃的步骤统一标记为完成
       setSteps((prev) => {
         const next = { ...prev };
         STEPS.forEach((key) => {
           if (next[key]?.status === "active") {
-            next[key] = { ...next[key], status: "completed", progressPct: 100 };
+            next[key] = { ...next[key], status: "completed", progressPct: 100, finishedAt: Date.now() };
           }
         });
         return next;
@@ -607,7 +618,7 @@ export default function Home() {
       es.close();
     });
 
-    es.addEventListener("error", () => {});
+    es.addEventListener("error", () => setStreamStatus("reconnecting"));
 
     return () => {
       es.close();
@@ -725,30 +736,25 @@ export default function Home() {
     setPhase("upload");
     setTaskId(null);
     setUploadedName("");
+    setError("");
+    setStreamStatus("connecting");
   };
 
   const activeStep = STEPS.find((k) => steps[k]?.status === "active");
-  const currentStepLabel = activeStep ? STEP_LABELS[activeStep] : "";
 
   const completedSteps = STEPS.filter((k) => steps[k]?.status === "completed").length;
   const overallPct = Math.round(
     (completedSteps * 100 + (activeStep ? (steps[activeStep]?.progressPct || 0) : 0)) / STEPS.length
   );
 
-  const formatElapsed = (sec: number) => {
-    const m = Math.floor(sec / 60);
-    const s = sec % 60;
-    return `${m}:${s.toString().padStart(2, "0")}`;
-  };
-
   // ===== ASSET LIST VIEW =====
   const renderAssetList = () => (
-    <div className="max-w-6xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+    <div className="content-shell">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold">资产管理</h2>
-          <p className="text-sm text-zinc-500">
-            浏览、查看和管理所有已处理的内容（视频/音频/链接）
+          <h2 className="page-heading">资产管理</h2>
+          <p className="page-description">
+            查找、继续处理和管理你沉淀的文本资产。
           </p>
         </div>
         <button
@@ -760,9 +766,9 @@ export default function Home() {
             setUrlInput("");
             setError("");
           }}
-          className="px-4 py-2 bg-sky-400 hover:bg-sky-400 rounded-lg text-sm font-medium transition-colors"
+          className="btn-primary"
         >
-          + 新建任务
+          <span aria-hidden="true">＋</span> 新建内容
         </button>
       </div>
 
@@ -773,18 +779,18 @@ export default function Home() {
       )}
 
       {/* Search & Filter */}
-      <div className="flex gap-3 mb-4">
+      <div className="library-toolbar">
         <input
           type="text"
           placeholder="按标题或文件名搜索..."
           value={assetSearch}
           onChange={(e) => setAssetSearch(e.target.value)}
-          className="flex-1 bg-zinc-50 border border-zinc-300 rounded-lg px-4 py-2 text-sm text-zinc-800 placeholder-zinc-500 focus:outline-none focus:border-sky-400"
+          className="control-field"
         />
         <select
           value={assetStatusFilter}
           onChange={(e) => setAssetStatusFilter(e.target.value)}
-          className="bg-zinc-50 border border-zinc-300 rounded-lg px-4 py-2 text-sm text-zinc-800 focus:outline-none focus:border-sky-400"
+          className="control-field"
         >
           <option value="">全部状态</option>
           <option value="completed">已完成</option>
@@ -794,85 +800,101 @@ export default function Home() {
         </select>
         <button
           onClick={fetchVideoList}
-          className="px-4 py-2 bg-zinc-200 hover:bg-zinc-300 rounded-lg text-sm transition-colors"
+          className="btn-secondary px-3"
+          title="刷新资产列表"
+          aria-label="刷新资产列表"
         >
-          刷新
+          ↻
         </button>
       </div>
 
       {/* Video List */}
       {loadingAssets ? (
-        <div className="text-center py-20 text-zinc-500">加载中...</div>
+        <div className="surface-card p-8 text-center text-zinc-500">正在加载资产…</div>
       ) : videoList.length === 0 ? (
-        <div className="text-center py-20">
-          <div className="text-4xl mb-3 text-zinc-400">[ ]</div>
-          <p className="text-zinc-500">暂无内容</p>
-          <p className="text-xs text-zinc-400 mt-1">上传视频、音频或链接即可开始</p>
+        <div className="empty-state">
+          <div className="empty-icon" aria-hidden="true">＋</div>
+          <p className="font-semibold text-zinc-800">还没有文本资产</p>
+          <p className="mt-1 text-sm text-zinc-500">添加一个视频、音频或链接，从第一篇文章开始。</p>
         </div>
       ) : (
-        <div className="grid gap-3">
+        <div className="surface-card library-list">
           {videoList.map((v) => (
             <div
               key={v.task_id}
-              className="bg-zinc-50 border border-zinc-200 rounded-lg p-4 hover:border-zinc-600 transition-colors"
+              className="library-row"
             >
-              <div className="flex items-center gap-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <h3 className="text-sm font-semibold text-zinc-800 truncate">
+              <button
+                type="button"
+                onClick={() => fetchVideoDetail(v.task_id)}
+                className="min-w-0 flex-1 text-left"
+              >
+                <div className="asset-row-content">
+                  <div className="min-w-0">
+                    <h3 className="truncate text-sm font-semibold text-zinc-800">
                       {v.title || v.filename}
                     </h3>
-                    <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[v.status] || "bg-zinc-300 text-zinc-400"}`}>
-                      {STATUS_LABELS[v.status] || v.status}
-                    </span>
-                    <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${SOURCE_COLORS[v.source_type] || "bg-zinc-100 text-zinc-500"}`}>
-                      {SOURCE_LABELS[v.source_type] || v.source_type}
-                    </span>
-                    {v.has_blog && (
-                      <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700">
-                        已生成产物
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-4 text-xs text-zinc-500">
-                    <span>{v.filename}</span>
-                    <span>时长 {formatDuration(v.duration)}</span>
-                    {v.processing_duration != null && (
-                      <span>处理耗时 {formatDuration(v.processing_duration)}</span>
-                    )}
-                    <span>{formatDate(v.created_at)}</span>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-500">
+                      <span>{SOURCE_LABELS[v.source_type] || v.source_type}</span>
+                      <span className="max-w-64 truncate">{v.filename}</span>
+                      <span>原片 {formatDuration(v.duration)}</span>
+                      {v.processing_duration != null && (
+                        <span>处理耗时 {formatDuration(v.processing_duration)}</span>
+                      )}
+                      <span>{formatDate(v.created_at)}</span>
+                      {v.has_blog && <span className="text-zinc-700">已有文章</span>}
+                    </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+              </button>
+
+              <div className="asset-row-actions">
+                <div className="asset-primary-action">
+                  <span className="asset-status">
+                    <span className={`status-dot ${STATUS_DOT_COLORS[v.status] || "bg-zinc-400"}`} />
+                    {STATUS_LABELS[v.status] || v.status}
+                  </span>
                   <button
+                    type="button"
                     onClick={() => fetchVideoDetail(v.task_id)}
-                    className="px-3 py-1.5 bg-sky-400 hover:bg-sky-400 rounded-lg text-xs font-medium transition-colors"
+                    className="btn-secondary asset-detail-button"
                   >
                     详情
                   </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAssetMenuId((current) => current === v.task_id ? null : v.task_id)}
+                  className="btn-ghost asset-more-button text-base leading-none"
+                  aria-label={`更多操作：${v.title || v.filename}`}
+                  aria-expanded={assetMenuId === v.task_id}
+                >
+                  ···
+                </button>
+                {assetMenuId === v.task_id && (
+                  <div className="action-menu">
                   {v.status === "pending" ? (
                     <button
-                      onClick={() => handleStartTranscription(v.task_id)}
+                      onClick={() => { setAssetMenuId(null); handleStartTranscription(v.task_id); }}
                       disabled={starting}
-                      className="px-3 py-1.5 bg-sky-50 hover:bg-sky-100 disabled:opacity-50 text-sky-600 rounded-lg text-xs font-medium transition-colors"
                     >
                       开始转录
                     </button>
                   ) : v.status === "completed" || v.status === "failed" || v.status === "cancelled" ? (
                     <button
-                      onClick={() => handleReprocess(v.task_id)}
-                      className="px-3 py-1.5 bg-yellow-50 hover:bg-yellow-100 text-yellow-600 rounded-lg text-xs font-medium transition-colors"
+                      onClick={() => { setAssetMenuId(null); handleReprocess(v.task_id); }}
                     >
                       重新处理
                     </button>
                   ) : null}
                   <button
-                    onClick={() => setDeleteConfirm(v.task_id)}
-                    className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg text-xs font-medium transition-colors"
+                    onClick={() => { setAssetMenuId(null); setDeleteConfirm(v.task_id); }}
+                    className="is-danger"
                   >
                     删除
                   </button>
                 </div>
+                )}
               </div>
             </div>
           ))}
@@ -962,23 +984,24 @@ export default function Home() {
     } : undefined;
 
     return (
-      <div className="max-w-5xl mx-auto">
+      <div className="content-shell max-w-5xl!">
         {error && (
           <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
             {error}
           </div>
         )}
-        <div className="flex items-center gap-3 mb-6">
+        <div className="flex items-center gap-3 mb-7">
           <button
             onClick={() => { setSelectedVideo(null); detailStage.reset(); }}
-            className="px-3 py-1.5 bg-zinc-200 hover:bg-zinc-300 rounded-lg text-sm transition-colors"
+            className="btn-secondary"
           >
-            返回
+            ← 返回
           </button>
           <div className="flex-1 min-w-0">
-            <h2 className="text-xl font-semibold truncate">{v.title || v.filename}</h2>
+            <h2 className="page-heading truncate text-[26px]!">{v.title || v.filename}</h2>
             <div className="flex items-center gap-3 text-xs text-zinc-500 mt-1">
-              <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[v.status] || "bg-zinc-300 text-zinc-400"}`}>
+              <span className="flex items-center gap-1.5">
+                <span className={`status-dot ${STATUS_DOT_COLORS[v.status] || "bg-zinc-400"}`} />
                 {STATUS_LABELS[v.status] || v.status}
               </span>
               <span>{v.filename}</span>
@@ -994,21 +1017,21 @@ export default function Home() {
               <button
                 onClick={() => handleStartTranscription(v.task_id)}
                 disabled={starting}
-                className="px-3 py-1.5 bg-sky-50 hover:bg-sky-100 disabled:opacity-50 text-sky-600 rounded-lg text-xs font-medium transition-colors"
+                className="btn-primary min-h-9 px-3 text-xs"
               >
                 {starting ? "启动中..." : "开始转录"}
               </button>
             ) : v.status === "completed" || v.status === "failed" || v.status === "cancelled" ? (
               <button
                 onClick={() => handleReprocess(v.task_id)}
-                className="px-3 py-1.5 bg-yellow-50 hover:bg-yellow-100 text-yellow-600 rounded-lg text-xs font-medium transition-colors"
+                className="btn-secondary min-h-9 px-3 text-xs text-amber-600"
               >
                 重新处理
               </button>
             ) : null}
             <button
               onClick={() => setDeleteConfirm(v.task_id)}
-              className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg text-xs font-medium transition-colors"
+              className="btn-danger min-h-9 px-3 text-xs"
             >
               删除
             </button>
@@ -1016,14 +1039,14 @@ export default function Home() {
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-4 gap-3 mb-6">
+        <div className="mb-6 grid grid-cols-2 border-y border-zinc-200 sm:grid-cols-4">
           {[
             { label: "转录片段", value: v.transcript_segments },
             { label: "章节数", value: v.chapters_count },
             { label: "知识点", value: v.concepts_count },
-            { label: "产物", value: v.blog ? "有" : "无" },
+            { label: "文章", value: v.blog ? "有" : "无" },
           ].map((s) => (
-            <div key={s.label} className="bg-zinc-50 border border-zinc-200 rounded-lg p-3 text-center">
+            <div key={s.label} className="border-zinc-200 p-4 text-center sm:border-r sm:last:border-r-0">
               <div className="text-lg font-bold text-zinc-800">{s.value}</div>
               <div className="text-xs text-zinc-500">{s.label}</div>
             </div>
@@ -1059,52 +1082,43 @@ export default function Home() {
   };
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="app-shell h-full flex flex-col">
       {/* Header */}
-      <header className="border-b border-zinc-200 px-6 py-3 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-6">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight">Video2TechBlog</h1>
-            <p className="text-xs text-zinc-500">
-              将视频、音频或链接转化为新的文本产物
-            </p>
+      <header className="app-header">
+        <div className="brand-lockup">
+          <span className="brand-mark" aria-hidden="true">V</span>
+          <div className="brand-copy">
+            <h1 className="brand-title">Video2Knowledge</h1>
           </div>
-          <nav className="flex gap-1 ml-4">
-            <button
-              onClick={() => {
-                setView("upload");
-                if (phase === "done") {
-                  setPhase("upload");
-                  setTaskId(null);
-                  setUploadedName("");
-                  setUrlInput("");
-                  setError("");
-                }
-              }}
-              className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-                view === "upload"
-                  ? "bg-zinc-900 text-white"
-                  : "text-zinc-500 hover:text-zinc-700 hover:bg-zinc-100"
-              }`}
-            >
-              上传
-            </button>
-            <button
-              onClick={() => { setView("assets"); setSelectedVideo(null); detailStage.reset(); }}
-              className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-                view === "assets"
-                  ? "bg-zinc-900 text-white"
-                  : "text-zinc-500 hover:text-zinc-700 hover:bg-zinc-100"
-              }`}
-            >
-              资产
-            </button>
-          </nav>
         </div>
+        <nav className="app-nav" aria-label="主导航">
+          <button
+            onClick={() => {
+              setView("upload");
+              if (phase === "done") {
+                setPhase("upload");
+                setTaskId(null);
+                setUploadedName("");
+                setUrlInput("");
+                setError("");
+              }
+            }}
+            className={`nav-pill ${view === "upload" ? "is-active" : ""}`}
+          >
+            新建内容
+          </button>
+          <button
+            onClick={() => { setView("assets"); setSelectedVideo(null); detailStage.reset(); }}
+            className={`nav-pill ${view === "assets" ? "is-active" : ""}`}
+          >
+            资产管理
+          </button>
+        </nav>
         <button
           onClick={() => setShowPromptSettings(true)}
-          className="p-2 hover:bg-zinc-100 rounded-lg transition-colors"
+          className="icon-button"
           title="提示词设置"
+          aria-label="打开提示词设置"
         >
           <svg className="w-5 h-5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
@@ -1123,9 +1137,9 @@ export default function Home() {
 
       {/* Regenerate dialog with preset selection */}
       {regenerateDialogVideoId && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setRegenerateDialogVideoId(null)}>
-          <div className="bg-white border border-zinc-200 rounded-xl p-6 max-w-md w-full mx-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold mb-4">重新生成产物</h3>
+        <div className="modal-backdrop" onClick={() => setRegenerateDialogVideoId(null)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="regenerate-title">
+            <h3 id="regenerate-title" className="text-lg font-semibold mb-4">重新生成文章</h3>
             <div className="mb-4">
               <label className="block text-sm font-medium text-zinc-700 mb-2">选择提示词预设</label>
               <PresetSelector
@@ -1135,18 +1149,18 @@ export default function Home() {
               />
             </div>
             <p className="text-xs text-zinc-500 mb-4">
-              将使用所选预设的提示词重新生成产物，保留已有的转录、章节和知识数据。
+              将使用所选文章风格重新生成文章，并保留已有的转录、章节和知识数据。
             </p>
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setRegenerateDialogVideoId(null)}
-                className="px-4 py-2 bg-zinc-200 hover:bg-zinc-300 rounded-lg text-sm transition-colors"
+                className="btn-secondary"
               >
                 取消
               </button>
               <button
                 onClick={() => handleRegenerate(regenerateDialogVideoId, regeneratePresetId)}
-                className="px-4 py-2 bg-sky-500 hover:bg-sky-600 rounded-lg text-sm font-medium text-white transition-colors"
+                className="btn-primary"
               >
                 确认生成
               </button>
@@ -1157,9 +1171,9 @@ export default function Home() {
 
       {/* Delete confirmation modal */}
       {deleteConfirm && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setDeleteConfirm(null)}>
-          <div className="bg-white border border-zinc-200 rounded-xl p-6 max-w-md w-full mx-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold mb-2">确认删除</h3>
+        <div className="modal-backdrop" onClick={() => setDeleteConfirm(null)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()} role="alertdialog" aria-modal="true" aria-labelledby="delete-title">
+            <h3 id="delete-title" className="text-lg font-semibold mb-2">确认删除</h3>
             <p className="text-sm text-zinc-500 mb-1">
               此操作将永久删除以下内容：
             </p>
@@ -1167,19 +1181,19 @@ export default function Home() {
               <li>原始上传文件（视频/音频/链接缓存）</li>
               <li>提取的音频</li>
               <li>转录文本、章节、知识点</li>
-              <li>生成的产物</li>
+              <li>生成的文章</li>
             </ul>
             <p className="text-xs text-zinc-400 mb-4 font-mono">{deleteConfirm}</p>
             <div className="flex gap-3 justify-end">
               <button
                 onClick={() => setDeleteConfirm(null)}
-                className="px-4 py-2 bg-zinc-200 hover:bg-zinc-300 rounded-lg text-sm transition-colors"
+                className="btn-secondary"
               >
                 取消
               </button>
               <button
                 onClick={() => handleDelete(deleteConfirm)}
-                className="px-4 py-2 bg-red-600 hover:bg-red-500 rounded-lg text-sm font-medium transition-colors"
+                className="btn-danger bg-red-600! text-white! hover:bg-red-700!"
               >
                 删除
               </button>
@@ -1190,10 +1204,10 @@ export default function Home() {
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Step Sidebar (upload/processing views only) */}
-        {view === "upload" && phase !== "upload" && (
-          <aside className="w-72 border-r border-zinc-200 p-5 shrink-0 overflow-y-auto bg-zinc-50/50">
-            <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-5">
+        {/* Completed-result sidebar; processing has its own three-column workspace. */}
+        {view === "upload" && phase === "done" && (
+          <aside className="stage-sidebar">
+            <h2 className="mb-5 text-sm font-semibold text-zinc-800">
               处理流程
             </h2>
             <ul className="relative">
@@ -1209,21 +1223,21 @@ export default function Home() {
                   return (
                     <li
                       key={key}
-                      className={`relative pl-10 pr-3 py-2.5 rounded-lg transition-all duration-300 ${
-                        isActive ? "bg-sky-50/80" : ""
+                      className={`relative py-2.5 pr-3 pl-10 transition-colors duration-200 ${
+                        isActive ? "border-l-2 border-blue-600 bg-white" : "border-l-2 border-transparent"
                       }`}
                     >
                       {/* Step indicator circle */}
                       <div className="absolute left-0 top-2.5 flex items-center justify-center">
                         <div
-                          className={`w-[30px] h-[30px] rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${
+                          className={`flex h-[30px] w-[30px] items-center justify-center rounded-full border text-xs font-bold transition-colors duration-200 ${
                             isCompleted
-                              ? "bg-emerald-500 text-white shadow-sm shadow-emerald-200"
+                              ? "border-zinc-300 bg-white text-emerald-700"
                               : isActive
-                                ? "bg-sky-400 text-white animate-pulse-ring shadow-sm shadow-sky-200"
+                                ? "border-blue-600 bg-white text-blue-600"
                                 : isError
-                                  ? "bg-red-500 text-white shadow-sm shadow-red-200"
-                                  : "bg-white border-2 border-zinc-300 text-zinc-400"
+                                  ? "border-red-500 bg-white text-red-600"
+                                  : "border-zinc-300 bg-white text-zinc-400"
                           }`}
                         >
                           {isCompleted ? (
@@ -1231,10 +1245,7 @@ export default function Home() {
                               <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                             </svg>
                           ) : isActive ? (
-                            <svg className="w-4 h-4 animate-spin-slow" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                            </svg>
+                            <span className="h-2 w-2 rounded-full bg-blue-600" />
                           ) : isError ? (
                             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -1249,7 +1260,7 @@ export default function Home() {
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <span className={`text-sm font-medium truncate ${
-                            isActive ? "text-sky-600"
+                            isActive ? "text-blue-700"
                             : isCompleted ? "text-zinc-500"
                             : isError ? "text-red-600"
                             : "text-zinc-400"
@@ -1282,475 +1293,261 @@ export default function Home() {
         )}
 
         {/* Content Area */}
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className={`app-main ${view === "upload" && phase === "processing" ? "app-main--processing" : ""}`}>
           {/* ASSETS VIEW */}
           {view === "assets" && !selectedVideo && renderAssetList()}
           {view === "assets" && selectedVideo && renderAssetDetail()}
 
           {/* UPLOAD VIEW */}
           {view === "upload" && phase === "upload" && (
-            <div className="max-w-2xl mx-auto mt-20">
-              <div className="text-center mb-8">
-                <h2 className="text-2xl font-bold mb-2">上传内容</h2>
-                <p className="text-zinc-500">
-                  支持视频文件、音频文件或媒体链接（YouTube/Bilibili 等）。
-                  上传完成后，由你手动启动转录和产物生成。
+            <div className="create-page">
+              <div className="create-intro">
+                <h2 className="hero-title">把视频整理成一篇文本资产</h2>
+                <p className="hero-description">
+                  上传视频、音频或链接，获得结构清晰、可以继续编辑的文本资产。
                 </p>
+                <ul className="capability-list" aria-label="核心能力">
+                  <li>准确转录语音与时间信息</li>
+                  <li>梳理章节、概念与方法</li>
+                  <li>生成可编辑、可导出的文章</li>
+                </ul>
               </div>
 
-              {/* Preset selector */}
-              <div className="flex items-center justify-center gap-2 mb-4">
-                <span className="text-sm text-zinc-500">提示词预设:</span>
-                <PresetSelector
-                  value={presetId}
-                  onChange={setPresetId}
-                  onManageClick={() => setShowPresetManager(true)}
-                />
-              </div>
-
-              {/* ASR provider selector */}
-              <div className="flex items-center justify-center gap-2 mb-6">
-                <span className="text-sm text-zinc-500">ASR</span>
-                <div className="inline-flex rounded-lg border border-zinc-200 bg-white p-1">
-                  <button
-                    type="button"
-                    onClick={() => setAsrProvider("whisper")}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                      asrProvider === "whisper"
-                        ? "bg-zinc-900 text-white"
-                        : "text-zinc-600 hover:bg-zinc-100"
-                    }`}
-                  >
-                    Whisper
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAsrProvider("mimo")}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                      asrProvider === "mimo"
-                        ? "bg-zinc-900 text-white"
-                        : "text-zinc-600 hover:bg-zinc-100"
-                    }`}
-                  >
-                    MIMO-ASR
-                  </button>
-                </div>
-              </div>
-
-              {/* Mode switcher */}
-              <div className="flex justify-center gap-2 mb-6">
-                <button
-                  onClick={() => { setUploadMode("file"); setError(""); }}
-                  disabled={Boolean(taskId)}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    uploadMode === "file"
-                      ? "bg-sky-400 text-white"
-                      : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
-                  } disabled:opacity-50 disabled:cursor-not-allowed`}
-                >
-                  文件上传
-                </button>
-                <button
-                  onClick={() => { setUploadMode("url"); setError(""); }}
-                  disabled={Boolean(taskId)}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    uploadMode === "url"
-                      ? "bg-sky-400 text-white"
-                      : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
-                  } disabled:opacity-50 disabled:cursor-not-allowed`}
-                >
-                  链接输入
-                </button>
-              </div>
-
-              {uploadMode === "file" ? (
-                <div
-                  onDrop={handleDrop}
-                  onDragOver={(e) => e.preventDefault()}
-                  onClick={() => {
-                    if (!taskId) fileInputRef.current?.click();
-                  }}
-                  className={`border-2 border-dashed rounded-xl p-12 text-center transition-colors ${
-                    taskId
-                      ? "border-emerald-300 bg-emerald-50/50 cursor-default"
-                      : "border-zinc-300 cursor-pointer hover:border-sky-400 hover:bg-sky-400/5"
-                  }`}
-                >
-                  {uploading ? (
-                    <div>
-                      <div className="w-full bg-zinc-200 rounded-full h-2 mb-4">
-                        <div
-                          className="bg-sky-400 h-2 rounded-full transition-all"
-                          style={{ width: `${uploadProgress}%` }}
-                        />
-                      </div>
-                      <p className="text-zinc-400">上传中... {uploadProgress}%</p>
+              <section className="upload-panel" aria-label="新建内容">
+                <div className="workspace-inner">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="text-left">
+                      <p className="text-sm font-semibold text-zinc-800">添加素材</p>
+                      <p className="mt-1 text-xs text-zinc-500">视频、音频或媒体链接均可开始</p>
                     </div>
-                  ) : taskId ? (
-                    <div>
-                      <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center">
-                        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      </div>
-                      <p className="font-medium text-emerald-700">上传成功</p>
-                      <p className="text-sm text-zinc-500 mt-1 break-all">{uploadedName}</p>
+                    <div className="source-switch" aria-label="素材类型">
+                      <button
+                        type="button"
+                        onClick={() => { setUploadMode("file"); setError(""); }}
+                        disabled={Boolean(taskId)}
+                        className={uploadMode === "file" ? "is-active" : ""}
+                      >
+                        本地文件
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setUploadMode("url"); setError(""); }}
+                        disabled={Boolean(taskId)}
+                        className={uploadMode === "url" ? "is-active" : ""}
+                      >
+                        媒体链接
+                      </button>
+                    </div>
+                  </div>
+
+                  {uploadMode === "file" ? (
+                    <div
+                      onDrop={(e) => { setIsDragActive(false); handleDrop(e); }}
+                      onDragEnter={(e) => { e.preventDefault(); setIsDragActive(true); }}
+                      onDragLeave={(e) => { e.preventDefault(); setIsDragActive(false); }}
+                      onDragOver={(e) => e.preventDefault()}
+                      onClick={() => {
+                        if (!taskId) fileInputRef.current?.click();
+                      }}
+                      className={`upload-dropzone ${isDragActive ? "is-dragging" : ""} ${taskId ? "is-complete" : ""}`}
+                    >
+                      {uploading ? (
+                        <div className="w-full max-w-md">
+                          <div className="progress-track mb-4">
+                            <div className="progress-fill" style={{ width: `${uploadProgress}%` }} />
+                          </div>
+                          <p className="font-medium text-zinc-700">正在上传 {uploadProgress}%</p>
+                          <p className="mt-1 text-xs text-zinc-400">请保持页面开启</p>
+                        </div>
+                      ) : taskId ? (
+                        <div>
+                          <div className="upload-orb bg-emerald-50! text-emerald-600!">✓</div>
+                          <p className="font-semibold text-emerald-700">素材已准备好</p>
+                          <p className="mt-1 max-w-md break-all text-sm text-zinc-500">{uploadedName}</p>
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="upload-orb" aria-hidden="true">↑</div>
+                          <p className="font-semibold text-zinc-800">拖入视频或音频文件</p>
+                          <p className="mt-1.5 text-sm text-zinc-500">或点击这里从电脑中选择</p>
+                          <p className="mt-4 text-xs text-zinc-400">
+                            MP4、MOV、AVI、MKV、MP3、WAV、M4A、AAC、FLAC
+                          </p>
+                        </div>
+                      )}
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="video/*,audio/*"
+                        className="hidden"
+                        onChange={handleFileSelect}
+                        disabled={Boolean(taskId)}
+                        aria-label="选择视频或音频文件"
+                      />
                     </div>
                   ) : (
-                    <div>
-                      <div className="text-4xl mb-3">+</div>
-                      <p className="text-zinc-400">点击或拖拽视频/音频文件到此处</p>
-                      <p className="text-xs text-zinc-400 mt-2">
-                        支持 MP4/MOV/AVI/MKV 视频，MP3/WAV/M4A/AAC/FLAC 等音频
-                      </p>
+                    <form onSubmit={handleUrlSubmit}>
+                      <div className="upload-dropzone min-h-[190px]! text-left! place-items-stretch!">
+                        <div className="my-auto w-full">
+                          <label className="field-label" htmlFor="media-url">媒体链接</label>
+                          <input
+                            id="media-url"
+                            type="url"
+                            placeholder="粘贴 YouTube、Bilibili、抖音或播客链接"
+                            value={urlInput}
+                            onChange={(e) => setUrlInput(e.target.value)}
+                            className="control-field"
+                            disabled={Boolean(taskId)}
+                            autoFocus
+                          />
+                          <p className="mt-3 text-xs leading-5 text-zinc-400">
+                            系统会自动提取音频轨道。部分需要登录的平台可能无法直接获取。
+                          </p>
+                        </div>
+                      </div>
+                      {!taskId && (
+                        <div className="mt-4 flex justify-end">
+                          <button
+                            type="submit"
+                            disabled={urlSubmitting || !urlInput.trim()}
+                            className="btn-primary min-w-32"
+                          >
+                            {urlSubmitting ? "正在解析…" : "解析链接 →"}
+                          </button>
+                        </div>
+                      )}
+                    </form>
+                  )}
+
+                  {showAdvancedOptions && (
+                    <div className="advanced-panel">
+                      <div className="advanced-grid">
+                        <div>
+                          <span className="field-label">文章风格</span>
+                          <PresetSelector
+                            value={presetId}
+                            onChange={setPresetId}
+                            onManageClick={() => setShowPresetManager(true)}
+                            compact
+                          />
+                        </div>
+                        <div>
+                          <span className="field-label">转录方式</span>
+                          <div className="source-switch">
+                            <button
+                              type="button"
+                              onClick={() => setAsrProvider("whisper")}
+                              className={asrProvider === "whisper" ? "is-active" : ""}
+                            >
+                              Whisper
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setAsrProvider("mimo")}
+                              className={asrProvider === "mimo" ? "is-active" : ""}
+                            >
+                              MIMO-ASR
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   )}
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="video/*,audio/*"
-                    className="hidden"
-                    onChange={handleFileSelect}
-                    disabled={Boolean(taskId)}
-                  />
-                </div>
-              ) : (
-                <form onSubmit={handleUrlSubmit} className="space-y-4">
-                  <div className="border-2 border-dashed border-zinc-300 rounded-xl p-8">
-                    <label className="block text-sm font-medium text-zinc-700 mb-2">
-                      媒体链接
-                    </label>
-                    <input
-                      type="url"
-                      placeholder="粘贴视频或音频链接（YouTube/Bilibili/抖音/播客 RSS 等）"
-                      value={urlInput}
-                      onChange={(e) => setUrlInput(e.target.value)}
-                      className="w-full bg-zinc-50 border border-zinc-300 rounded-lg px-4 py-3 text-sm text-zinc-800 placeholder-zinc-500 focus:outline-none focus:border-sky-400"
-                      disabled={Boolean(taskId)}
-                      autoFocus
-                    />
-                    <p className="text-xs text-zinc-400 mt-2">
-                      链接将由 yt-dlp 下载音频轨道后转录。部分平台可能需要登录，详见 FAQ。
-                    </p>
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={urlSubmitting || !urlInput.trim() || Boolean(taskId)}
-                    className="w-full px-4 py-3 bg-sky-400 hover:bg-sky-400 disabled:bg-zinc-300 disabled:cursor-not-allowed rounded-lg text-sm font-medium text-white transition-colors"
-                  >
-                    {urlSubmitting ? "提交中..." : "提交链接"}
-                  </button>
-                </form>
-              )}
 
-              {taskId && (
-                <div className="mt-5 bg-white border border-zinc-200 rounded-xl p-5 shadow-sm">
-                  <div className="flex items-center justify-between gap-4 mb-4">
-                    <div>
-                      <p className="font-medium text-zinc-800">准备开始转录</p>
-                      <p className="text-sm text-zinc-500 mt-1">
-                        当前模型：{asrProvider === "mimo" ? "MIMO-ASR" : "Whisper"}，可在上方切换后再启动。
-                      </p>
+                  <div className="option-strip">
+                    <div className="option-chips">
+                      <button
+                        type="button"
+                        className={`settings-trigger ${showAdvancedOptions ? "is-active" : ""}`}
+                        onClick={() => setShowAdvancedOptions((current) => !current)}
+                        aria-expanded={showAdvancedOptions}
+                        aria-label={showAdvancedOptions ? "收起设置" : "打开设置"}
+                        title={showAdvancedOptions ? "收起设置" : "设置"}
+                      >
+                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.7} aria-hidden="true">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                      </button>
+                      <span className="option-chip">{asrProvider === "mimo" ? "MIMO-ASR" : "Whisper"}</span>
+                      <span className="option-chip">中文优先</span>
                     </div>
-                    <span className="shrink-0 px-2.5 py-1 rounded-full bg-yellow-100 text-yellow-700 text-xs font-medium">
-                      待启动
-                    </span>
+                    {taskId && (
+                      <button
+                        type="button"
+                        onClick={() => handleStartTranscription(taskId)}
+                        disabled={starting}
+                        className="btn-primary min-w-36"
+                      >
+                        {starting ? "正在启动…" : "开始整理"}
+                      </button>
+                    )}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => handleStartTranscription(taskId)}
-                    disabled={starting}
-                    className="w-full px-5 py-3 bg-sky-400 hover:bg-sky-500 disabled:bg-zinc-300 disabled:cursor-not-allowed rounded-xl text-white font-semibold transition-colors"
-                  >
-                    {starting ? "启动中..." : "开始转录"}
-                  </button>
-                </div>
-              )}
 
-              {error && (
-                <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
-                  {error}
+                  {error && (
+                    <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-left text-sm text-red-600" role="alert">
+                      {error}
+                    </div>
+                  )}
                 </div>
+              </section>
+
+              {videoList.length > 0 && (
+                <section className="recent-section animate-fade-in-up" aria-labelledby="recent-tasks-title">
+                  <div className="mb-3 flex items-center justify-between">
+                    <div>
+                      <h3 id="recent-tasks-title" className="text-sm font-semibold text-zinc-800">最近内容</h3>
+                      <p className="mt-1 text-xs text-zinc-500">继续上次的整理工作</p>
+                    </div>
+                    <button type="button" onClick={() => setView("assets")} className="btn-ghost min-h-8 px-3 text-xs">
+                      查看全部 →
+                    </button>
+                  </div>
+                  <div className="recent-list">
+                    {videoList.slice(0, 3).map((video) => (
+                      <button
+                        key={video.task_id}
+                        type="button"
+                        onClick={() => { setView("assets"); fetchVideoDetail(video.task_id); }}
+                        className="recent-row w-full min-w-0 text-left"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-zinc-800">{video.title || video.filename}</p>
+                          <p className="mt-1.5 text-xs text-zinc-500">
+                            {SOURCE_LABELS[video.source_type] || video.source_type} · {formatDate(video.created_at)}
+                          </p>
+                        </div>
+                        <span className="flex items-center gap-2 text-xs text-zinc-500">
+                          <span className={`status-dot ${STATUS_DOT_COLORS[video.status] || "bg-zinc-400"}`} />
+                          {STATUS_LABELS[video.status] || video.status}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
               )}
             </div>
           )}
 
           {view === "upload" && phase === "processing" && (
-            <div className="max-w-4xl mx-auto">
-              {/* Compact processing header */}
-              <div className="mb-5">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <svg className="w-4 h-4 text-sky-500 animate-spin-slow shrink-0" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                      </svg>
-                      <div className="min-w-0">
-                        <h2 className="min-w-0 truncate text-lg font-semibold text-zinc-800">
-                          {currentStepLabel || "准备中..."}
-                        </h2>
-                        {uploadedName && (
-                          <p className="mt-0.5 text-xs text-zinc-400 truncate">{uploadedName}</p>
-                        )}
-                      </div>
-                      <span className="rounded-md bg-sky-50 px-2 py-0.5 text-xs font-mono font-semibold text-sky-600 tabular-nums">
-                        {overallPct}%
-                      </span>
-                    </div>
-                    {activeStep && steps[activeStep]?.message && (
-                      <p className="mt-1 text-sm text-zinc-500 truncate">
-                        {steps[activeStep].message}
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm font-mono text-zinc-500 tabular-nums">
-                      {formatElapsed(elapsed)}
-                    </span>
-                    <button
-                      onClick={handleCancel}
-                      className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg text-sm font-medium transition-colors"
-                    >
-                      终止
-                    </button>
-                  </div>
-                </div>
-
-                <div className="mt-4">
-                  <div className="grid grid-cols-5 items-start gap-0">
-                    {STEPS.map((key, idx) => {
-                      const s = steps[key];
-                      const isActive = s?.status === "active";
-                      const isCompleted = s?.status === "completed";
-                      const isError = s?.status === "error";
-                      const isReached = isActive || isCompleted || isError;
-
-                      return (
-                        <div key={key} className="relative min-w-0">
-                          {idx > 0 && (
-                            <div className={`absolute left-0 right-1/2 top-3 h-0.5 ${
-                              isCompleted || isActive || isError ? "bg-emerald-300" : "bg-zinc-200"
-                            }`} />
-                          )}
-                          {idx < STEPS.length - 1 && (
-                            <div className={`absolute left-1/2 right-0 top-3 h-0.5 ${
-                              isCompleted ? "bg-emerald-300" : "bg-zinc-200"
-                            }`} />
-                          )}
-                          <div className="relative flex flex-col items-center gap-1.5 px-1">
-                            <span className={`flex h-6 w-6 items-center justify-center rounded-full border-2 text-[11px] font-semibold transition-colors ${
-                              isError
-                                ? "border-red-500 bg-red-500 text-white"
-                                : isCompleted
-                                  ? "border-emerald-500 bg-emerald-500 text-white"
-                                  : isActive
-                                    ? "border-sky-500 bg-white text-sky-600"
-                                    : "border-zinc-300 bg-white text-zinc-400"
-                            }`}>
-                              {isCompleted ? "✓" : isError ? "!" : idx + 1}
-                            </span>
-                            <span className={`max-w-full truncate text-center text-[11px] font-medium ${
-                              isError
-                                ? "text-red-600"
-                                : isReached
-                                  ? "text-zinc-700"
-                                  : "text-zinc-400"
-                            }`}>
-                              {STEP_LABELS[key]}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
-                    <span>{completedSteps}/{STEPS.length} 步骤完成</span>
-                    <span className="font-mono tabular-nums">总进度 {overallPct}%</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Step progress cards */}
-              <section className="mb-6">
-                <div className="space-y-2">
-                  {STEPS.map((key) => {
-                    const s = steps[key];
-                    const isActive = s?.status === "active";
-                    const isCompleted = s?.status === "completed";
-                    const isError = s?.status === "error";
-                    const isPending = !s || s.status === "pending";
-                    const pct = isCompleted ? 100 : Math.max(0, Math.min(100, s?.progressPct ?? 0));
-                    const apiProgress = s?.apiProgress;
-
-                    return (
-                      <div key={key}>
-                        <div
-                          className={`border shadow-sm transition-all duration-300 ${
-                            isActive
-                              ? "rounded-xl border-sky-200 bg-white p-4 shadow-sky-100"
-                              : isCompleted
-                                ? "rounded-lg border-emerald-200 bg-emerald-50 px-3 py-2"
-                                : isError
-                                  ? "rounded-xl border-red-200 bg-white p-4"
-                                  : "rounded-lg border-zinc-200 bg-white px-3 py-2"
-                          }`}
-                        >
-                          <div className="flex items-start justify-between gap-4">
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className={`w-2 h-2 rounded-full shrink-0 ${
-                                  isActive ? "bg-sky-400 animate-pulse"
-                                  : isCompleted ? "bg-emerald-500"
-                                  : isError ? "bg-red-500"
-                                  : "bg-zinc-300"
-                                 }`} />
-                                <h3 className={`text-sm font-semibold ${
-                                  isActive ? "text-sky-700"
-                                  : isCompleted ? "text-emerald-700"
-                                  : isError ? "text-red-600"
-                                  : "text-zinc-500"
-                                }`}>
-                                  {STEP_LABELS[key]}
-                                </h3>
-                              </div>
-                              <p className="mt-1 text-xs text-zinc-500 truncate">
-                               {isActive ? (s.message || s.detail || "处理中...") : isCompleted ? (s.detail || "已完成") : isError ? "处理失败" : "等待上一步完成"}
-                              </p>
-                            </div>
-                            <span className={`shrink-0 text-xs font-mono font-semibold tabular-nums ${
-                              isError ? "text-red-500"
-                              : isCompleted ? "text-emerald-600"
-                              : isActive ? "text-sky-500"
-                              : "text-zinc-400"
-                            }`}>
-                              {isError ? "失败" : isCompleted ? "已完成" : isPending ? "等待" : `${pct}%`}
-                            </span>
-                          </div>
-
-                          {isActive && key === "transcribe" && apiProgress && apiProgress.total > 0 && (
-                            <div className="mt-3 rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-700">
-                              <div className="flex items-center justify-between gap-3">
-                                <span>转录模型 API 请求</span>
-                                <span className="font-mono font-semibold tabular-nums">
-                                  {apiProgress.completed}/{apiProgress.total}
-                                </span>
-                              </div>
-                              <p className="mt-1 text-sky-600/80">
-                                已完成 {apiProgress.completed} 次请求
-                                {apiProgress.current ? `，正在处理第 ${apiProgress.current} 次` : ""}
-                              </p>
-                            </div>
-                          )}
-
-                          {!isCompleted && (
-                            <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-zinc-100">
-                              <div
-                                className={`h-2.5 rounded-full transition-all duration-500 ease-out ${
-                                  isActive
-                                    ? "animate-shimmer"
-                                    : isError
-                                      ? "bg-red-500"
-                                      : "bg-zinc-200"
-                                }`}
-                                style={{ width: `${pct}%` }}
-                              />
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-
-              {/* Live transcript */}
-              {transcript && (
-                <section className="mb-6 animate-fade-in-up">
-                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
-                    实时转录
-                  </h3>
-                  <div className="bg-zinc-50 border border-zinc-200 rounded-xl p-4 max-h-64 overflow-y-auto shadow-sm">
-                    <pre className="text-sm text-zinc-700 whitespace-pre-wrap font-mono leading-relaxed">
-                      {transcript.slice(-3000)}
-                    </pre>
-                  </div>
-                </section>
-              )}
-
-              {/* Chapters */}
-              {chapters.length > 0 && (
-                <section className="mb-6 animate-fade-in-up">
-                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                    章节结构
-                  </h3>
-                  <div className="bg-white border border-zinc-200 rounded-xl p-4 shadow-sm">
-                    <ol className="space-y-2">
-                      {chapters.map((ch, i) => (
-                        <li key={i} className="flex items-start gap-3 text-sm">
-                          <span className="flex-none w-6 h-6 rounded-full bg-zinc-100 text-zinc-500 text-xs font-semibold flex items-center justify-center mt-0.5">
-                            {i + 1}
-                          </span>
-                          <div>
-                            <span className="font-medium text-zinc-800">{ch.title as string}</span>
-                            <span className="text-zinc-400 ml-2 text-xs font-mono">
-                              {ch.start_time as number}s – {ch.end_time as number}s
-                            </span>
-                          </div>
-                        </li>
-                      ))}
-                    </ol>
-                  </div>
-                </section>
-              )}
-
-              {/* Knowledge extraction */}
-              {Object.keys(knowledge).length > 0 && (
-                <section className="mb-6 animate-fade-in-up">
-                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                    知识提取
-                  </h3>
-                  <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-                    {(
-                      ["concepts", "frameworks", "methods", "tools", "papers", "code_examples", "insights"] as const
-                    ).map((cat) => {
-                      const items = knowledge[cat] as string[] | undefined;
-                      if (!items || items.length === 0) return null;
-                      return (
-                        <div key={cat} className="bg-white border border-zinc-200 rounded-xl p-3 shadow-sm">
-                          <h4 className="text-xs font-semibold text-zinc-500 uppercase mb-1.5">{cat}</h4>
-                          <ul className="space-y-0.5">
-                            {items.map((item, i) => (
-                              <li key={i} className="text-sm text-zinc-700">{item}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
-              )}
-
-              {/* Live blog output */}
-              {blogMd && (
-                <section className="mb-6 animate-fade-in-up">
-                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
-                    实时产物输出
-                  </h3>
-                  <div className="bg-white border border-zinc-200 rounded-xl p-5 max-h-[70vh] overflow-y-auto shadow-sm">
-                    <MarkdownRenderer content={blogMd} />
-                  </div>
-                </section>
-              )}
-            </div>
+            <ProcessingWorkspace
+              uploadedName={uploadedName}
+              steps={steps}
+              transcript={transcript}
+              chapters={chapters}
+              knowledge={knowledge}
+              blogMarkdown={blogMd}
+              elapsed={elapsed}
+              overallPct={overallPct}
+              completedSteps={completedSteps}
+              error={error}
+              streamStatus={streamStatus}
+              onCancel={handleCancel}
+            />
           )}
 
           {view === "upload" && phase === "done" && taskId && (
-            <div className="max-w-5xl mx-auto">
+            <div className="content-shell max-w-5xl!">
               <div className="flex items-center justify-between mb-6">
                 <div>
                   <h2 className="text-xl font-semibold mb-1">处理完成</h2>
@@ -1767,9 +1564,9 @@ export default function Home() {
                     setError("");
                     doneStage.reset();
                   }}
-                  className="px-4 py-2 bg-zinc-200 hover:bg-zinc-300 rounded-lg text-sm transition-colors"
+                  className="btn-secondary"
                 >
-                  新建任务
+                  新建内容
                 </button>
               </div>
 

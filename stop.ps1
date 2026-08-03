@@ -1,9 +1,9 @@
-# Video2TechBlog - Stop Script
+# Video2Knowledge - Stop Script
 # Stops backend (port 8001) and frontend (port 3002)
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  Stopping Video2TechBlog Servers" -ForegroundColor Cyan
+Write-Host "  Stopping Video2Knowledge Servers" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 

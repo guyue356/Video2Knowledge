@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Video2TechBlog",
-  description: "Transform Technical Videos into Publication-Ready Technical Articles",
+  title: "Video2Knowledge",
+  description: "把视频、音频和媒体链接整理成结构清晰、可继续编辑的文本资产。",
 };
 
 export default function RootLayout({
@@ -13,9 +13,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN" className="h-full">
-      <body className="h-full bg-white text-zinc-900 font-sans antialiased">
-        {children}
-      </body>
+      <body className="h-full antialiased">{children}</body>
     </html>
   );
 }

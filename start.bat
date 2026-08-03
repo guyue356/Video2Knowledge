@@ -1,13 +1,13 @@
 @echo off
 chcp 65001 >nul
-title Video2TechBlog Launcher
+title Video2Knowledge Launcher
 
 echo.
 echo ============================================
-echo   Video2TechBlog - Double-click to Start
+echo   Video2Knowledge - Double-click to Start
 echo ============================================
 echo.
-echo Starting Video2TechBlog...
+echo Starting Video2Knowledge...
 echo A new window will open with the servers.
 echo Browser will open automatically in 5 seconds.
 echo.

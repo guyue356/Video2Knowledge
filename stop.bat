@@ -1,5 +1,6 @@
 @echo off
 chcp 65001 >nul
+title Video2Knowledge Stop
 
 REM Self-elevate to admin if not already
 net session >nul 2>&1

@@ -177,20 +177,23 @@ export default function PresetManager({ open, onClose, onPresetsChanged }: Prese
   const isEditing = editingId !== null || creating;
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+    <div className="drawer-backdrop" onClick={onClose}>
       <div
-        className="bg-white border border-zinc-200 rounded-xl shadow-xl max-w-4xl w-full mx-4 max-h-[85vh] flex flex-col"
+        className="drawer-panel"
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="preset-manager-title"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200">
           <div>
-            <h2 className="text-lg font-semibold">预设管理</h2>
+            <h2 id="preset-manager-title" className="text-lg font-semibold">预设管理</h2>
             <p className="text-sm text-zinc-500 mt-0.5">
-              管理产物生成的提示词预设，可在上传或重新生成时选择
+              管理文章风格，可在添加素材或重新生成文章时选择
             </p>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-zinc-100 rounded-lg transition-colors">
+          <button onClick={onClose} className="icon-button" aria-label="关闭预设管理">
             <svg className="w-5 h-5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -222,13 +225,13 @@ export default function PresetManager({ open, onClose, onPresetsChanged }: Prese
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label className="block text-sm font-medium text-zinc-700 mb-1">预设名称 *</label>
                   <input
                     value={editName}
                     onChange={(e) => setEditName(e.target.value)}
-                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sky-400"
+                    className="control-field"
                     placeholder="如: 默认、简洁风格、学术风格"
                   />
                 </div>
@@ -237,7 +240,7 @@ export default function PresetManager({ open, onClose, onPresetsChanged }: Prese
                   <input
                     value={editDesc}
                     onChange={(e) => setEditDesc(e.target.value)}
-                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sky-400"
+                    className="control-field"
                     placeholder="预设用途说明"
                   />
                 </div>
@@ -248,9 +251,9 @@ export default function PresetManager({ open, onClose, onPresetsChanged }: Prese
                 <textarea
                   value={editSystem}
                   onChange={(e) => setEditSystem(e.target.value)}
-                  className="w-full h-40 px-3 py-2 border border-zinc-300 rounded-lg text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-sky-400"
+                  className="control-field h-40 py-3 font-mono text-sm resize-y"
                   spellCheck={false}
-                  placeholder="定义 AI 的角色和输出要求..."
+                  placeholder="定义写作角色和输出要求..."
                 />
               </div>
 
@@ -264,7 +267,7 @@ export default function PresetManager({ open, onClose, onPresetsChanged }: Prese
                 <textarea
                   value={editUser}
                   onChange={(e) => setEditUser(e.target.value)}
-                  className="w-full h-40 px-3 py-2 border border-zinc-300 rounded-lg text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-sky-400"
+                  className="control-field h-40 py-3 font-mono text-sm resize-y"
                   spellCheck={false}
                   placeholder="用户消息模板，包含数据标签..."
                 />
@@ -285,13 +288,13 @@ export default function PresetManager({ open, onClose, onPresetsChanged }: Prese
                 <button
                   onClick={handleSave}
                   disabled={saving}
-                  className="px-5 py-2 bg-sky-500 hover:bg-sky-600 disabled:opacity-40 rounded-lg text-sm font-medium text-white transition-colors"
+                  className="btn-primary"
                 >
                   {saving ? "保存中..." : "保存"}
                 </button>
                 <button
                   onClick={cancelEdit}
-                  className="px-5 py-2 bg-zinc-200 hover:bg-zinc-300 rounded-lg text-sm transition-colors"
+                  className="btn-secondary"
                 >
                   取消
                 </button>
@@ -303,7 +306,7 @@ export default function PresetManager({ open, onClose, onPresetsChanged }: Prese
               <div className="flex justify-end mb-2">
                 <button
                   onClick={startCreate}
-                  className="px-4 py-2 bg-sky-500 hover:bg-sky-600 rounded-lg text-sm font-medium text-white transition-colors"
+                  className="btn-primary"
                 >
                   + 新建预设
                 </button>
@@ -313,13 +316,13 @@ export default function PresetManager({ open, onClose, onPresetsChanged }: Prese
                 <div className="text-center py-12 text-zinc-400">暂无预设</div>
               ) : (
                 presets.map((p) => (
-                  <div key={p.id} className="border border-zinc-200 rounded-lg p-4">
+                  <div key={p.id} className="surface-card p-4">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-zinc-800">{p.name}</span>
                           {p.is_default && (
-                            <span className="px-2 py-0.5 bg-sky-100 text-sky-700 text-xs rounded-full">默认</span>
+                            <span className="text-xs font-medium text-blue-700">默认</span>
                           )}
                         </div>
                         {p.description && (
@@ -332,14 +335,14 @@ export default function PresetManager({ open, onClose, onPresetsChanged }: Prese
                       <div className="flex gap-2 ml-4 shrink-0">
                         <button
                           onClick={() => startEdit(p)}
-                          className="px-3 py-1.5 bg-zinc-100 hover:bg-zinc-200 rounded-lg text-xs font-medium transition-colors"
+                          className="btn-ghost min-h-8 px-3 text-xs"
                         >
                           编辑
                         </button>
                         {!p.is_default && (
                           <button
                             onClick={() => handleSetDefault(p.id)}
-                            className="px-3 py-1.5 bg-zinc-100 hover:bg-zinc-200 rounded-lg text-xs font-medium transition-colors"
+                            className="btn-ghost min-h-8 px-3 text-xs"
                           >
                             设为默认
                           </button>
@@ -347,7 +350,7 @@ export default function PresetManager({ open, onClose, onPresetsChanged }: Prese
                         {!p.is_default && (
                           <button
                             onClick={() => handleDelete(p.id)}
-                            className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg text-xs font-medium transition-colors"
+                            className="btn-danger min-h-8 px-3 text-xs"
                           >
                             删除
                           </button>

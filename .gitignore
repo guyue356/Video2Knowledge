@@ -22,3 +22,5 @@ backend/*.db
 # WorkBuddy local workspace data
 .workbuddy/
 
+/promo-video
+
